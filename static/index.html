@@ -230,6 +230,7 @@ async function toggleSession() {
 async function startSession() {
   const btn = document.getElementById('btnMain');
   btn.disabled = true;
+  setStatus('A iniciar...', '');
 
   const langTo = document.getElementById('langTo').value;
 
@@ -239,30 +240,57 @@ async function startSession() {
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
     });
   } catch(e) {
-    setStatus('Sem acesso ao microfone: ' + e.message, 'error');
+    setStatus('Erro microfone: ' + e.message, 'error');
+    addLog('⚠ Microfone: ' + e.message, 't-err');
     btn.disabled = false;
     return;
   }
 
-  // Contexto de captura a 16kHz
-  audioCtx = new AudioContext({ sampleRate: 16000 });
-  const source = audioCtx.createMediaStreamSource(micStream);
+  setStatus('Microfone OK, a ligar ao servidor...', '');
 
-  // ScriptProcessor para capturar PCM
-  processor = audioCtx.createScriptProcessor(1600, 1, 1);
+  // Contexto de captura — tenta 16kHz, cai para padrão se falhar
+  try {
+    audioCtx = new AudioContext({ sampleRate: 16000 });
+  } catch(e) {
+    try { audioCtx = new AudioContext(); } catch(e2) {
+      setStatus('Erro AudioContext: ' + e2.message, 'error');
+      btn.disabled = false;
+      return;
+    }
+  }
+
+  const nativeRate = audioCtx.sampleRate;
+  const source = audioCtx.createMediaStreamSource(micStream);
+  const chunkSize = Math.floor(nativeRate * 0.1); // 100ms
+  processor = audioCtx.createScriptProcessor(chunkSize, 1, 1);
   source.connect(processor);
   processor.connect(audioCtx.destination);
 
   // Contexto de reprodução a 24kHz
-  playCtx = new AudioContext({ sampleRate: 24000 });
+  try {
+    playCtx = new AudioContext({ sampleRate: 24000 });
+  } catch(e) {
+    playCtx = new AudioContext();
+  }
   nextPlayTime = 0;
 
   // WebSocket
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  const wsUrl = `${proto}://${location.host}/ws`;
+  addLog('• A conectar: ' + wsUrl, 't-sys');
+
+  try {
+    ws = new WebSocket(wsUrl);
+  } catch(e) {
+    setStatus('Erro WebSocket: ' + e.message, 'error');
+    addLog('⚠ WS: ' + e.message, 't-err');
+    btn.disabled = false;
+    return;
+  }
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
+    addLog('• WebSocket ligado', 't-sys');
     ws.send(JSON.stringify({ type: 'start', lang: langTo }));
   };
 
@@ -270,30 +298,43 @@ async function startSession() {
     if (evt.data instanceof ArrayBuffer) {
       playPCM(evt.data);
     } else {
-      const msg = JSON.parse(evt.data);
-      if (msg.type === 'status')        setStatus(msg.msg, msg.msg.includes('Traduz') ? 'active' : '');
-      else if (msg.type === 'error')    { addLog('⚠ ' + msg.msg, 't-err'); setStatus(msg.msg, 'error'); }
-      else if (msg.type === 'transcript_in')  addLog('🟡 ' + msg.text, 't-in');
-      else if (msg.type === 'transcript_out') addLog('   → ' + msg.text, 't-out');
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === 'status')              setStatus(msg.msg, msg.msg.includes('Traduz') ? 'active' : '');
+        else if (msg.type === 'error')          { addLog('⚠ ' + msg.msg, 't-err'); setStatus(msg.msg, 'error'); }
+        else if (msg.type === 'transcript_in')  addLog('🟡 ' + msg.text, 't-in');
+        else if (msg.type === 'transcript_out') addLog('   → ' + msg.text, 't-out');
+      } catch(e) { addLog('⚠ Parse: ' + e.message, 't-err'); }
     }
   };
 
-  ws.onclose = () => {
+  ws.onclose = (evt) => {
+    addLog('• WS fechado: código ' + evt.code + ' — ' + (evt.reason || 'sem motivo'), 't-sys');
     if (isRunning) stopSession();
   };
 
-  ws.onerror = () => {
-    setStatus('Erro de ligação', 'error');
+  ws.onerror = (evt) => {
+    setStatus('Erro de ligação WebSocket', 'error');
+    addLog('⚠ Erro WS (ver consola)', 't-err');
     stopSession();
   };
 
-  // Enviar áudio PCM Int16 ao servidor
+  // Enviar áudio PCM Int16 ao servidor (reamostrado para 16kHz se necessário)
   processor.onaudioprocess = (e) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const float32 = e.inputBuffer.getChannelData(0);
-    const int16 = new Int16Array(float32.length);
-    for (let i = 0; i < float32.length; i++) {
-      int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
+
+    let samples = float32;
+    if (nativeRate !== 16000) {
+      const ratio = nativeRate / 16000;
+      const outLen = Math.floor(float32.length / ratio);
+      samples = new Float32Array(outLen);
+      for (let i = 0; i < outLen; i++) samples[i] = float32[Math.floor(i * ratio)];
+    }
+
+    const int16 = new Int16Array(samples.length);
+    for (let i = 0; i < samples.length; i++) {
+      int16[i] = Math.max(-32768, Math.min(32767, samples[i] * 32768));
     }
     ws.send(int16.buffer);
   };
@@ -302,7 +343,7 @@ async function startSession() {
   btn.textContent = '■ Parar';
   btn.className = 'btn btn-stop';
   btn.disabled = false;
-  addLog('• Sessão iniciada → ' + document.getElementById('langTo').selectedOptions[0].text, 't-sys');
+  addLog('• Taxa de captura: ' + nativeRate + 'Hz', 't-sys');
 }
 
 function stopSession() {

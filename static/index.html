@@ -26,36 +26,21 @@
     min-height: 100dvh;
     display: flex;
     flex-direction: column;
-    padding: 16px;
-    gap: 14px;
+    padding: 14px;
+    gap: 12px;
   }
 
-  header {
-    text-align: center;
-  }
-  header h1 {
-    color: var(--blue);
-    font-size: 1.2rem;
-    font-weight: 700;
-  }
-  header p {
-    color: var(--gray);
-    font-size: 0.75rem;
-    margin-top: 2px;
-  }
+  header { text-align: center; }
+  header h1 { color: var(--blue); font-size: 1.15rem; font-weight: 700; }
+  header p  { color: var(--gray); font-size: 0.72rem; margin-top: 2px; }
 
   .card {
     background: var(--card);
     border-radius: 14px;
-    padding: 16px;
+    padding: 14px;
   }
 
-  label {
-    display: block;
-    color: var(--gray);
-    font-size: 0.8rem;
-    margin-bottom: 4px;
-  }
+  label { display: block; color: var(--gray); font-size: 0.78rem; margin-bottom: 4px; }
 
   select {
     width: 100%;
@@ -63,13 +48,12 @@
     color: var(--text);
     border: none;
     border-radius: 8px;
-    padding: 10px 12px;
-    font-size: 0.95rem;
+    padding: 9px 32px 9px 10px;
+    font-size: 0.9rem;
     appearance: none;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%234cc9f0' d='M6 8L0 0h12z'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
-    background-position: right 12px center;
-    padding-right: 32px;
+    background-position: right 10px center;
     cursor: pointer;
   }
   select:focus { outline: 2px solid var(--blue); }
@@ -79,34 +63,58 @@
     grid-template-columns: 1fr auto 1fr;
     gap: 8px;
     align-items: end;
-    margin-top: 4px;
   }
-  .lang-arrow {
-    color: var(--blue);
-    font-size: 1.4rem;
-    text-align: center;
-    padding-bottom: 8px;
+  .lang-arrow { color: var(--blue); font-size: 1.3rem; text-align: center; padding-bottom: 8px; }
+
+  /* Botão de setup */
+  .btn-connect {
+    width: 100%; border: none; border-radius: 12px;
+    padding: 14px; font-size: 1rem; font-weight: 700;
+    cursor: pointer; transition: opacity .15s;
+    background: var(--green); color: #000;
+  }
+  .btn-connect.disconnect { background: var(--red); color: #fff; }
+  .btn-connect:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Botões de fala */
+  .talk-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
   }
 
-  .btn {
-    width: 100%;
+  .btn-talk {
     border: none;
-    border-radius: 12px;
-    padding: 16px;
-    font-size: 1.1rem;
+    border-radius: 14px;
+    padding: 22px 10px;
+    font-size: 1rem;
     font-weight: 700;
     cursor: pointer;
-    transition: opacity .15s, transform .1s;
-    letter-spacing: .02em;
+    touch-action: none;
+    user-select: none;
+    transition: transform .1s, box-shadow .1s;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    -webkit-tap-highlight-color: transparent;
   }
-  .btn:active { transform: scale(0.97); opacity: 0.85; }
-  .btn-start  { background: var(--green); color: #000; }
-  .btn-stop   { background: var(--red);   color: #fff; }
-  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-talk span.sub { font-size: 0.72rem; font-weight: 400; opacity: 0.8; }
+  .btn-talk:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  .btn-eu   { background: var(--gold); color: #000; }
+  .btn-outro { background: var(--green); color: #000; }
+
+  .btn-talk.speaking {
+    transform: scale(0.95);
+    box-shadow: 0 0 28px rgba(255,255,255,0.4);
+  }
+  .btn-eu.speaking   { box-shadow: 0 0 28px var(--gold); }
+  .btn-outro.speaking { box-shadow: 0 0 28px var(--green); }
 
   #status {
     text-align: center;
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     color: var(--gray);
     min-height: 1.2em;
   }
@@ -117,99 +125,106 @@
     background: #0d1117;
     border-radius: 10px;
     padding: 10px;
-    height: 200px;
     overflow-y: auto;
     font-family: 'Consolas', monospace;
-    font-size: 0.82rem;
+    font-size: 0.8rem;
     flex: 1;
+    min-height: 120px;
   }
-  .transcript-box p { margin-bottom: 4px; line-height: 1.4; }
+  .transcript-box p { margin-bottom: 3px; line-height: 1.4; }
   .t-in  { color: var(--gold); }
   .t-out { color: var(--green); }
   .t-sys { color: var(--blue); }
   .t-err { color: var(--red); }
-
-  .legend {
-    display: flex;
-    gap: 12px;
-    font-size: 0.75rem;
-    color: var(--gray);
-    flex-wrap: wrap;
-  }
-  .legend span { display: flex; align-items: center; gap: 4px; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 </style>
 </head>
 <body>
 
 <header>
   <h1>🎙 JSL Live Translate</h1>
-  <p>Gemini 3.5 Live Translate • Bidirecional</p>
+  <p>Gemini 3.5 Live Translate • Push-to-Talk Bidirecional</p>
 </header>
 
 <div class="card">
   <div class="lang-row">
     <div>
-      <label>Falo em</label>
+      <label>Eu falo em</label>
       <select id="langFrom"></select>
     </div>
     <div class="lang-arrow">⇄</div>
     <div>
-      <label>Traduzir para</label>
+      <label>Outro fala em</label>
       <select id="langTo"></select>
     </div>
   </div>
 </div>
 
-<button class="btn btn-start" id="btnMain" onclick="toggleSession()">▶ Iniciar Tradução</button>
+<button class="btn-connect" id="btnConnect" onclick="toggleConnect()">▶ Ligar</button>
 
-<div id="status">Pronto</div>
+<div class="talk-row">
+  <button class="btn-talk btn-eu" id="btnEu" disabled>
+    🎙 EU FALO
+    <span class="sub" id="labelEu">—</span>
+  </button>
+  <button class="btn-talk btn-outro" id="btnOutro" disabled>
+    🎙 OUTRO FALA
+    <span class="sub" id="labelOutro">—</span>
+  </button>
+</div>
 
-<div class="card" style="flex:1; display:flex; flex-direction:column; gap:8px; min-height:0;">
-  <div class="legend">
-    <span><span class="dot" style="background:var(--gold)"></span> Você fala</span>
-    <span><span class="dot" style="background:var(--green)"></span> Tradução</span>
+<div id="status">Pronto — ligue para começar</div>
+
+<div class="card" style="flex:1; display:flex; flex-direction:column; gap:6px; min-height:0;">
+  <div style="display:flex; gap:12px; font-size:0.72rem; color:var(--gray); flex-wrap:wrap;">
+    <span style="color:var(--gold)">🟡 Original</span>
+    <span style="color:var(--green)">→ Tradução</span>
   </div>
   <div class="transcript-box" id="transcript"></div>
 </div>
 
 <script>
+// ── Estado ────────────────────────────────────────────────────────────────────
 const LANGUAGES = [];
-let ws = null;   // sessão A→B
-let ws2 = null;  // sessão B→A (bidirecional)
-let isRunning = false;
-let audioCtx = null;
-let micStream = null;
-let processor = null;
-let playCtx = null;
+let ws  = null;   // A→B (eu falo langFrom, traduz para langTo)
+let ws2 = null;   // B→A (outro fala langTo, traduz para langFrom)
+let isConnected = false;
+let activeWS    = null;  // sessão activa no push-to-talk
+let audioCtx    = null;
+let micStream   = null;
+let processor   = null;
+let playCtx     = null;
 let nextPlayTime = 0;
 
-// ── Carregar idiomas ──────────────────────────────────────────────────────────
+// ── Idiomas ───────────────────────────────────────────────────────────────────
 async function loadLanguages() {
   try {
-    const res = await fetch('/languages');
-    const langs = await res.json();
+    const langs = await (await fetch('/languages')).json();
     langs.forEach(l => LANGUAGES.push(l));
     const from = document.getElementById('langFrom');
     const to   = document.getElementById('langTo');
-    langs.forEach(l => {
-      from.add(new Option(l.label, l.code));
-      to.add(new Option(l.label, l.code));
-    });
+    langs.forEach(l => { from.add(new Option(l.label, l.code)); to.add(new Option(l.label, l.code)); });
     from.value = 'pt';
     to.value   = 'en';
-  } catch(e) {
-    setStatus('Erro a carregar idiomas', 'error');
-  }
+    updateLabels();
+  } catch(e) { setStatus('Erro a carregar idiomas', 'error'); }
 }
 
-// ── UI ────────────────────────────────────────────────────────────────────────
+function updateLabels() {
+  const from = document.getElementById('langFrom');
+  const to   = document.getElementById('langTo');
+  const fLabel = from.selectedOptions[0]?.text.split(' ')[0] || '?';
+  const tLabel = to.selectedOptions[0]?.text.split(' ')[0] || '?';
+  document.getElementById('labelEu').textContent = fLabel + ' → ' + tLabel;
+  document.getElementById('labelOutro').textContent = tLabel + ' → ' + fLabel;
+}
+document.addEventListener('change', e => { if (e.target.id === 'langFrom' || e.target.id === 'langTo') updateLabels(); });
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
 function setStatus(msg, cls = '') {
   const el = document.getElementById('status');
   el.textContent = msg;
   el.className = cls;
 }
-
 function addLog(text, cls) {
   const box = document.getElementById('transcript');
   const p = document.createElement('p');
@@ -219,80 +234,69 @@ function addLog(text, cls) {
   box.scrollTop = box.scrollHeight;
 }
 
-// ── Sessão principal ──────────────────────────────────────────────────────────
-async function toggleSession() {
-  if (isRunning) {
-    stopSession();
-  } else {
-    await startSession();
-  }
-}
-
-// Abre um WebSocket para uma direcção de tradução
-function openWS(targetLang, label) {
+// ── WebSocket por direcção ────────────────────────────────────────────────────
+function openWS(targetLang, label, onReady) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const sock = new WebSocket(`${proto}://${location.host}/ws`);
-  sock.binaryType = 'arraybuffer';
+  const s = new WebSocket(`${proto}://${location.host}/ws`);
+  s.binaryType = 'arraybuffer';
 
   const t = setTimeout(() => {
-    if (sock.readyState !== WebSocket.OPEN) {
-      addLog('⚠ Timeout ' + label, 't-err');
-      stopSession();
-    }
-  }, 10000);
+    addLog('⚠ Timeout ' + label, 't-err');
+    disconnect();
+  }, 12000);
 
-  sock.onerror = () => { clearTimeout(t); addLog('⚠ Erro WS ' + label, 't-err'); stopSession(); };
-  sock.onclose = (e) => { clearTimeout(t); if (isRunning) stopSession(); };
-  sock.onmessage = (evt) => {
+  s.onerror = () => { clearTimeout(t); addLog('⚠ Erro WS ' + label, 't-err'); };
+  s.onclose = (e) => { clearTimeout(t); if (isConnected) { addLog('• ' + label + ' fechado', 't-sys'); } };
+  s.onmessage = (evt) => {
     if (evt.data instanceof ArrayBuffer) { playPCM(evt.data); return; }
     try {
       const m = JSON.parse(evt.data);
       if (m.type === 'status' && label === 'A→B') setStatus(m.msg, m.msg.includes('Traduz') ? 'active' : '');
-      else if (m.type === 'error')          { addLog('⚠ [' + label + '] ' + m.msg, 't-err'); }
+      else if (m.type === 'error')          addLog('⚠ [' + label + '] ' + m.msg, 't-err');
       else if (m.type === 'transcript_in')  addLog('[' + label + '] 🟡 ' + m.text, 't-in');
       else if (m.type === 'transcript_out') addLog('[' + label + ']  → ' + m.text, 't-out');
     } catch(e) {}
   };
-  sock.onopen = () => {
+  s.onopen = () => {
     clearTimeout(t);
     addLog('• ' + label + ' ligado', 't-sys');
-    sock.send(JSON.stringify({ type: 'start', lang: targetLang }));
+    s.send(JSON.stringify({ type: 'start', lang: targetLang }));
+    onReady();
   };
-  return sock;
+  return s;
 }
 
-async function startSession() {
-  const btn = document.getElementById('btnMain');
+// ── Ligar / Desligar ──────────────────────────────────────────────────────────
+async function toggleConnect() {
+  if (isConnected) { disconnect(); return; }
+  await connect();
+}
+
+async function connect() {
+  const btn = document.getElementById('btnConnect');
   btn.disabled = true;
-  setStatus('A iniciar...', '');
+  setStatus('A iniciar microfone...', '');
 
   const langFrom = document.getElementById('langFrom').value;
   const langTo   = document.getElementById('langTo').value;
 
-  // Microfone
   try {
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
     });
   } catch(e) {
     setStatus('Erro microfone: ' + e.message, 'error');
-    addLog('⚠ Mic: ' + e.message, 't-err');
     btn.disabled = false; return;
   }
-  addLog('• Mic OK — bidirecional: ' + langFrom + ' ⇄ ' + langTo, 't-sys');
 
-  // Áudio
-  let nativeRate = 48000;
   try {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    nativeRate = audioCtx.sampleRate;
     const src = audioCtx.createMediaStreamSource(micStream);
     processor = audioCtx.createScriptProcessor(4096, 1, 1);
     src.connect(processor);
     processor.connect(audioCtx.destination);
   } catch(e) {
     setStatus('Erro áudio: ' + e.message, 'error');
-    addLog('⚠ Audio: ' + e.message, 't-err');
     micStream.getTracks().forEach(t => t.stop());
     btn.disabled = false; return;
   }
@@ -300,12 +304,11 @@ async function startSession() {
   try { playCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) { playCtx = null; }
   nextPlayTime = 0;
 
-  // Duas sessões Gemini: A→B e B→A
-  ws  = openWS(langTo,   'A→B');  // você fala langFrom, traduz para langTo
-  ws2 = openWS(langFrom, 'B→A');  // outro fala langTo, traduz para langFrom
+  const nativeRate = audioCtx.sampleRate;
 
-  // Envia áudio para ambas as sessões
+  // Enviar áudio apenas para a sessão activa no push-to-talk
   processor.onaudioprocess = (ev) => {
+    if (!activeWS || activeWS.readyState !== WebSocket.OPEN) return;
     const f32 = ev.inputBuffer.getChannelData(0);
     let s = f32;
     if (nativeRate !== 16000) {
@@ -316,19 +319,34 @@ async function startSession() {
     }
     const i16 = new Int16Array(s.length);
     for (let i = 0; i < s.length; i++) i16[i] = Math.max(-32768, Math.min(32767, s[i] * 32768));
-    if (ws  && ws.readyState  === WebSocket.OPEN) ws.send(i16.buffer);
-    if (ws2 && ws2.readyState === WebSocket.OPEN) ws2.send(i16.buffer);
+    activeWS.send(i16.buffer);
   };
 
-  isRunning = true;
-  btn.textContent = '■ Parar';
-  btn.className = 'btn btn-stop';
+  setStatus('A ligar sessões Gemini...', '');
+  let readyCount = 0;
+  const onReady = () => {
+    readyCount++;
+    if (readyCount === 2) {
+      isConnected = true;
+      btn.textContent = '■ Desligar';
+      btn.className = 'btn-connect disconnect';
+      btn.disabled = false;
+      document.getElementById('btnEu').disabled = false;
+      document.getElementById('btnOutro').disabled = false;
+      setStatus('Ligado — prima e segura para falar', 'active');
+      addLog('• Pronto! Prima o botão enquanto fala.', 't-sys');
+    }
+  };
+
+  ws  = openWS(langTo,   'A→B', onReady);
+  ws2 = openWS(langFrom, 'B→A', onReady);
+
   btn.disabled = false;
-  setStatus('A conectar...', '');
 }
 
-function stopSession() {
-  isRunning = false;
+function disconnect() {
+  isConnected = false;
+  activeWS = null;
 
   for (const s of [ws, ws2]) {
     if (s) { try { s.send(JSON.stringify({ type: 'stop' })); } catch {} try { s.close(); } catch {} }
@@ -340,28 +358,63 @@ function stopSession() {
   if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
   if (playCtx)   { try { playCtx.close(); } catch {} playCtx = null; }
 
-  const btn = document.getElementById('btnMain');
-  btn.textContent = '▶ Iniciar Tradução';
-  btn.className = 'btn btn-start';
-  btn.disabled = false;
-  setStatus('Parado');
+  document.getElementById('btnConnect').textContent = '▶ Ligar';
+  document.getElementById('btnConnect').className = 'btn-connect';
+  document.getElementById('btnEu').disabled = true;
+  document.getElementById('btnOutro').disabled = true;
+  setBtnSpeaking('btnEu', false);
+  setBtnSpeaking('btnOutro', false);
+  setStatus('Desligado');
   addLog('• Sessão terminada', 't-sys');
 }
 
-// ── Reprodução áudio PCM Int16 24kHz ─────────────────────────────────────────
+// ── Push-to-talk ──────────────────────────────────────────────────────────────
+function setBtnSpeaking(id, on) {
+  const el = document.getElementById(id);
+  if (on) el.classList.add('speaking');
+  else    el.classList.remove('speaking');
+}
+
+function startTalk(session, btnId) {
+  if (!isConnected) return;
+  activeWS = session;
+  setBtnSpeaking(btnId, true);
+}
+
+function stopTalk(btnId) {
+  activeWS = null;
+  setBtnSpeaking(btnId, false);
+}
+
+// Eventos para botão EU FALO
+const btnEu = document.getElementById('btnEu');
+btnEu.addEventListener('mousedown',  () => startTalk(ws, 'btnEu'));
+btnEu.addEventListener('touchstart', (e) => { e.preventDefault(); startTalk(ws, 'btnEu'); }, { passive: false });
+btnEu.addEventListener('mouseup',    () => stopTalk('btnEu'));
+btnEu.addEventListener('mouseleave', () => stopTalk('btnEu'));
+btnEu.addEventListener('touchend',   (e) => { e.preventDefault(); stopTalk('btnEu'); }, { passive: false });
+btnEu.addEventListener('touchcancel',() => stopTalk('btnEu'));
+
+// Eventos para botão OUTRO FALA
+const btnOutro = document.getElementById('btnOutro');
+btnOutro.addEventListener('mousedown',  () => startTalk(ws2, 'btnOutro'));
+btnOutro.addEventListener('touchstart', (e) => { e.preventDefault(); startTalk(ws2, 'btnOutro'); }, { passive: false });
+btnOutro.addEventListener('mouseup',    () => stopTalk('btnOutro'));
+btnOutro.addEventListener('mouseleave', () => stopTalk('btnOutro'));
+btnOutro.addEventListener('touchend',   (e) => { e.preventDefault(); stopTalk('btnOutro'); }, { passive: false });
+btnOutro.addEventListener('touchcancel',() => stopTalk('btnOutro'));
+
+// ── Reprodução áudio PCM 24kHz ────────────────────────────────────────────────
 function playPCM(arrayBuffer) {
   if (!playCtx) return;
   const int16 = new Int16Array(arrayBuffer);
-  const float32 = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
-
-  const buf = playCtx.createBuffer(1, float32.length, 24000);
-  buf.copyToChannel(float32, 0);
-
+  const f32   = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 32768;
+  const buf = playCtx.createBuffer(1, f32.length, 24000);
+  buf.copyToChannel(f32, 0);
   const src = playCtx.createBufferSource();
   src.buffer = buf;
   src.connect(playCtx.destination);
-
   const now = playCtx.currentTime;
   if (nextPlayTime < now) nextPlayTime = now + 0.05;
   src.start(nextPlayTime);

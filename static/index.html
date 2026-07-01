@@ -411,6 +411,10 @@ function startTalk(session, btnId) {
 }
 
 function stopTalk(btnId) {
+  // Sinaliza fim de turno explicitamente ao Gemini antes de parar de enviar áudio
+  if (activeWS && activeWS.readyState === WebSocket.OPEN) {
+    try { activeWS.send(JSON.stringify({ type: 'turn_end' })); } catch {}
+  }
   activeWS = null;
   setBtnSpeaking(btnId, false);
 }
@@ -450,8 +454,9 @@ function playPCM(arrayBuffer) {
   nextPlayTime += buf.duration;
 
   // Bloqueia microfone durante + 300ms após o fim da reprodução
+  // (teto de 4s como rede de segurança, caso o cálculo de nextPlayTime falhe)
   isPlaying = true;
-  const stopAt = nextPlayTime - playCtx.currentTime + 0.3;
+  const stopAt = Math.min(nextPlayTime - playCtx.currentTime + 0.3, 4);
   clearTimeout(playPCM._timer);
   playPCM._timer = setTimeout(() => { isPlaying = false; }, stopAt * 1000);
 }

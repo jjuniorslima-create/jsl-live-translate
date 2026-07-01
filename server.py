@@ -136,8 +136,12 @@ async def ws_translate(websocket: WebSocket):
                     for part in sc.model_turn.parts:
                         if part.inline_data and part.inline_data.data:
                             await websocket.send_bytes(part.inline_data.data)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[gemini_recv] erro: {type(e).__name__}: {e}", flush=True)
+            try:
+                await websocket.send_text(json.dumps({"type": "error", "msg": f"Gemini: {e}"}))
+            except Exception:
+                pass
 
     client = genai.Client(api_key=api_key)
     cfg = types.LiveConnectConfig(
@@ -153,22 +157,23 @@ async def ws_translate(websocket: WebSocket):
     try:
         async with client.aio.live.connect(model=MODEL, config=cfg) as session:
             await websocket.send_text(json.dumps({"type": "status", "msg": "Conectado! A traduzir..."}))
-            recv_task = asyncio.create_task(browser_receiver())
-            done, pending = await asyncio.wait(
-                [
-                    asyncio.create_task(gemini_send(session)),
-                    asyncio.create_task(gemini_recv(session)),
-                    recv_task,
-                ],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for t in pending:
+
+            browser_task = asyncio.create_task(browser_receiver())
+            send_task    = asyncio.create_task(gemini_send(session))
+            recv_task    = asyncio.create_task(gemini_recv(session))
+
+            # Aguarda apenas o browser desligar (stop ou disconnect)
+            # gemini_send/recv podem terminar por si e não derrubam a sessão
+            await browser_task
+
+            for t in [send_task, recv_task]:
                 t.cancel()
                 try:
                     await t
                 except (asyncio.CancelledError, Exception):
                     pass
     except Exception as e:
+        print(f"[ws_translate] erro sessão: {type(e).__name__}: {e}", flush=True)
         try:
             await websocket.send_text(json.dumps({"type": "error", "msg": str(e)}))
         except Exception:

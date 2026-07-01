@@ -93,6 +93,8 @@ async def ws_translate(websocket: WebSocket):
                     data = json.loads(msg["text"])
                     if data.get("type") == "stop":
                         break
+                    elif data.get("type") == "turn_start":
+                        await audio_queue.put(("turn_start", None))
                     elif data.get("type") == "turn_end":
                         await audio_queue.put(("turn_end", None))
         except (WebSocketDisconnect, Exception):
@@ -101,7 +103,7 @@ async def ws_translate(websocket: WebSocket):
         await audio_queue.put(None)
 
     async def gemini_send(session):
-        """Envia áudio do browser para o Gemini e fecha o turno explicitamente."""
+        """Envia áudio do browser para o Gemini e marca início/fim de turno explicitamente."""
         while not stop_event.is_set():
             item = await audio_queue.get()
             if item is None:
@@ -112,9 +114,12 @@ async def ws_translate(websocket: WebSocket):
                     await session.send_realtime_input(
                         audio=types.Blob(data=payload, mime_type="audio/pcm;rate=16000")
                     )
+                elif kind == "turn_start":
+                    print("[gemini_send] turn_start", flush=True)
+                    await session.send_realtime_input(activity_start=types.ActivityStart())
                 elif kind == "turn_end":
-                    print("[gemini_send] turn_end recebido, a fechar turno", flush=True)
-                    await session.send_realtime_input(audio_stream_end=True)
+                    print("[gemini_send] turn_end", flush=True)
+                    await session.send_realtime_input(activity_end=types.ActivityEnd())
             except Exception as e:
                 print(f"[gemini_send] erro: {type(e).__name__}: {e}", flush=True)
                 break
@@ -189,6 +194,12 @@ async def ws_translate(websocket: WebSocket):
         translation_config=types.TranslationConfig(
             target_language_code=target_lang,
             echo_target_language=False,
+        ),
+        # VAD automático desligado: o turno é controlado manualmente pelo
+        # botão push-to-talk (activity_start / activity_end), senão o
+        # audio_stream_end/VAD do Gemini corta a fala de forma imprevisível.
+        realtime_input_config=types.RealtimeInputConfig(
+            automatic_activity_detection=types.AutomaticActivityDetection(disabled=True),
         ),
     )
 

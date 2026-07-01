@@ -407,6 +407,9 @@ function setBtnSpeaking(id, on) {
 function startTalk(session, btnId) {
   if (!isConnected) return;
   activeWS = session;
+  if (activeWS.readyState === WebSocket.OPEN) {
+    try { activeWS.send(JSON.stringify({ type: 'turn_start' })); } catch {}
+  }
   setBtnSpeaking(btnId, true);
 }
 

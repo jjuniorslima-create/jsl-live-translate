@@ -115,35 +115,37 @@ async def ws_translate(websocket: WebSocket):
     async def gemini_recv(session):
         """Recebe áudio traduzido e transcrições do Gemini e envia ao browser.
 
-        Segue o padrão oficial do exemplo google-gemini/gemini-live-api-examples:
-        session.receive() é recriado a cada turno (o generator fecha no fim de
-        cada turno) dentro de um while externo que corre durante toda a sessão.
+        gemini-3.5-live-translate-preview é "designed for continuous stream
+        processing without turn-based interactions" (doc oficial:
+        ai.google.dev/gemini-api/docs/live-api/live-translate) — ao contrário
+        da Live API genérica (por turnos), aqui session.receive() é chamado
+        UMA ÚNICA VEZ e iterado continuamente durante toda a sessão. Recriar
+        o generator a cada "turno" (padrão correto só para a Live API
+        genérica) interrompe este stream contínuo.
         """
         try:
-            while not stop_event.is_set():
-                turn = session.receive()
-                async for resp in turn:
-                    if stop_event.is_set():
-                        break
-                    sc = resp.server_content
-                    if not sc:
-                        continue
-                    if sc.input_transcription and sc.input_transcription.text:
-                        await websocket.send_text(json.dumps({
-                            "type": "transcript_in",
-                            "text": sc.input_transcription.text,
-                            "final": bool(getattr(sc.input_transcription, "finished", False))
-                        }))
-                    if sc.output_transcription and sc.output_transcription.text:
-                        await websocket.send_text(json.dumps({
-                            "type": "transcript_out",
-                            "text": sc.output_transcription.text,
-                            "final": bool(getattr(sc.output_transcription, "finished", False))
-                        }))
-                    if sc.model_turn:
-                        for part in sc.model_turn.parts:
-                            if part.inline_data and part.inline_data.data:
-                                await websocket.send_bytes(part.inline_data.data)
+            async for resp in session.receive():
+                if stop_event.is_set():
+                    break
+                sc = resp.server_content
+                if not sc:
+                    continue
+                if sc.input_transcription and sc.input_transcription.text:
+                    await websocket.send_text(json.dumps({
+                        "type": "transcript_in",
+                        "text": sc.input_transcription.text,
+                        "final": bool(getattr(sc.input_transcription, "finished", False))
+                    }))
+                if sc.output_transcription and sc.output_transcription.text:
+                    await websocket.send_text(json.dumps({
+                        "type": "transcript_out",
+                        "text": sc.output_transcription.text,
+                        "final": bool(getattr(sc.output_transcription, "finished", False))
+                    }))
+                if sc.model_turn:
+                    for part in sc.model_turn.parts:
+                        if part.inline_data and part.inline_data.data:
+                            await websocket.send_bytes(part.inline_data.data)
         except Exception as e:
             print(f"[gemini_recv] erro: {type(e).__name__}: {e}", flush=True)
             if stop_event.is_set():

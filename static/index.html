@@ -175,7 +175,8 @@
 
 <script>
 const LANGUAGES = [];
-let ws = null;
+let ws = null;   // sessão A→B
+let ws2 = null;  // sessão B→A (bidirecional)
 let isRunning = false;
 let audioCtx = null;
 let micStream = null;
@@ -227,12 +228,46 @@ async function toggleSession() {
   }
 }
 
+// Abre um WebSocket para uma direcção de tradução
+function openWS(targetLang, label) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const sock = new WebSocket(`${proto}://${location.host}/ws`);
+  sock.binaryType = 'arraybuffer';
+
+  const t = setTimeout(() => {
+    if (sock.readyState !== WebSocket.OPEN) {
+      addLog('⚠ Timeout ' + label, 't-err');
+      stopSession();
+    }
+  }, 10000);
+
+  sock.onerror = () => { clearTimeout(t); addLog('⚠ Erro WS ' + label, 't-err'); stopSession(); };
+  sock.onclose = (e) => { clearTimeout(t); if (isRunning) stopSession(); };
+  sock.onmessage = (evt) => {
+    if (evt.data instanceof ArrayBuffer) { playPCM(evt.data); return; }
+    try {
+      const m = JSON.parse(evt.data);
+      if (m.type === 'status' && label === 'A→B') setStatus(m.msg, m.msg.includes('Traduz') ? 'active' : '');
+      else if (m.type === 'error')          { addLog('⚠ [' + label + '] ' + m.msg, 't-err'); }
+      else if (m.type === 'transcript_in')  addLog('[' + label + '] 🟡 ' + m.text, 't-in');
+      else if (m.type === 'transcript_out') addLog('[' + label + ']  → ' + m.text, 't-out');
+    } catch(e) {}
+  };
+  sock.onopen = () => {
+    clearTimeout(t);
+    addLog('• ' + label + ' ligado', 't-sys');
+    sock.send(JSON.stringify({ type: 'start', lang: targetLang }));
+  };
+  return sock;
+}
+
 async function startSession() {
   const btn = document.getElementById('btnMain');
   btn.disabled = true;
   setStatus('A iniciar...', '');
 
-  const langTo = document.getElementById('langTo').value;
+  const langFrom = document.getElementById('langFrom').value;
+  const langTo   = document.getElementById('langTo').value;
 
   // Microfone
   try {
@@ -241,115 +276,64 @@ async function startSession() {
     });
   } catch(e) {
     setStatus('Erro microfone: ' + e.message, 'error');
-    addLog('⚠ Microfone: ' + e.message, 't-err');
-    btn.disabled = false;
-    return;
+    addLog('⚠ Mic: ' + e.message, 't-err');
+    btn.disabled = false; return;
   }
+  addLog('• Mic OK — bidirecional: ' + langFrom + ' ⇄ ' + langTo, 't-sys');
 
-  setStatus('Microfone OK, a ligar ao servidor...', '');
-  addLog('• Mic OK', 't-sys');
-
-  // WebSocket primeiro — áudio só depois de ligado
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const wsUrl = `${proto}://${location.host}/ws`;
-  addLog('• WS: ' + wsUrl, 't-sys');
-
-  try { ws = new WebSocket(wsUrl); }
-  catch(e) {
-    setStatus('Erro WS: ' + e.message, 'error');
-    addLog('⚠ ' + e.message, 't-err');
+  // Áudio
+  let nativeRate = 48000;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    nativeRate = audioCtx.sampleRate;
+    const src = audioCtx.createMediaStreamSource(micStream);
+    processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    src.connect(processor);
+    processor.connect(audioCtx.destination);
+  } catch(e) {
+    setStatus('Erro áudio: ' + e.message, 'error');
+    addLog('⚠ Audio: ' + e.message, 't-err');
     micStream.getTracks().forEach(t => t.stop());
     btn.disabled = false; return;
   }
-  ws.binaryType = 'arraybuffer';
-  addLog('• WS estado=' + ws.readyState, 't-sys');
 
-  const wsTimeout = setTimeout(() => {
-    addLog('⚠ Timeout (estado=' + (ws ? ws.readyState : '?') + ')', 't-err');
-    setStatus('Servidor não responde (timeout)', 'error');
-    stopSession();
-  }, 10000);
+  try { playCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) { playCtx = null; }
+  nextPlayTime = 0;
 
-  ws.onerror = () => {
-    clearTimeout(wsTimeout);
-    addLog('⚠ WS onerror', 't-err');
-    setStatus('Erro de ligação', 'error');
-    stopSession();
-  };
+  // Duas sessões Gemini: A→B e B→A
+  ws  = openWS(langTo,   'A→B');  // você fala langFrom, traduz para langTo
+  ws2 = openWS(langFrom, 'B→A');  // outro fala langTo, traduz para langFrom
 
-  ws.onclose = (e) => {
-    clearTimeout(wsTimeout);
-    addLog('• WS fechado ' + e.code + ' ' + (e.reason||''), 't-sys');
-    if (isRunning) stopSession();
-  };
-
-  ws.onmessage = (evt) => {
-    if (evt.data instanceof ArrayBuffer) { playPCM(evt.data); return; }
-    try {
-      const m = JSON.parse(evt.data);
-      if (m.type === 'status')             setStatus(m.msg, m.msg.includes('Traduz') ? 'active' : '');
-      else if (m.type === 'error')         { addLog('⚠ ' + m.msg, 't-err'); setStatus(m.msg, 'error'); }
-      else if (m.type === 'transcript_in') addLog('🟡 ' + m.text, 't-in');
-      else if (m.type === 'transcript_out') addLog('   → ' + m.text, 't-out');
-    } catch(e) { addLog('⚠ parse: ' + e.message, 't-err'); }
-  };
-
-  ws.onopen = () => {
-    clearTimeout(wsTimeout);
-    addLog('• WS ligado!', 't-sys');
-    ws.send(JSON.stringify({ type: 'start', lang: langTo }));
-
-    // Áudio só agora
-    let nativeRate = 48000;
-    try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      nativeRate = audioCtx.sampleRate;
-      addLog('• AudioCtx ' + nativeRate + 'Hz', 't-sys');
-      const src = audioCtx.createMediaStreamSource(micStream);
-      processor = audioCtx.createScriptProcessor(4096, 1, 1);
-      src.connect(processor);
-      processor.connect(audioCtx.destination);
-    } catch(e) {
-      addLog('⚠ Audio setup: ' + e.message, 't-err');
-      setStatus('Erro áudio: ' + e.message, 'error');
-      stopSession(); return;
+  // Envia áudio para ambas as sessões
+  processor.onaudioprocess = (ev) => {
+    const f32 = ev.inputBuffer.getChannelData(0);
+    let s = f32;
+    if (nativeRate !== 16000) {
+      const r = nativeRate / 16000;
+      const n = Math.floor(f32.length / r);
+      s = new Float32Array(n);
+      for (let i = 0; i < n; i++) s[i] = f32[Math.floor(i * r)];
     }
-
-    try { playCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-    catch(e) { playCtx = null; }
-    nextPlayTime = 0;
-
-    processor.onaudioprocess = (ev) => {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      const f32 = ev.inputBuffer.getChannelData(0);
-      let s = f32;
-      if (nativeRate !== 16000) {
-        const r = nativeRate / 16000;
-        const n = Math.floor(f32.length / r);
-        s = new Float32Array(n);
-        for (let i = 0; i < n; i++) s[i] = f32[Math.floor(i * r)];
-      }
-      const i16 = new Int16Array(s.length);
-      for (let i = 0; i < s.length; i++) i16[i] = Math.max(-32768, Math.min(32767, s[i] * 32768));
-      ws.send(i16.buffer);
-    };
-    addLog('• Captura iniciada', 't-sys');
+    const i16 = new Int16Array(s.length);
+    for (let i = 0; i < s.length; i++) i16[i] = Math.max(-32768, Math.min(32767, s[i] * 32768));
+    if (ws  && ws.readyState  === WebSocket.OPEN) ws.send(i16.buffer);
+    if (ws2 && ws2.readyState === WebSocket.OPEN) ws2.send(i16.buffer);
   };
 
   isRunning = true;
   btn.textContent = '■ Parar';
   btn.className = 'btn btn-stop';
   btn.disabled = false;
+  setStatus('A conectar...', '');
 }
 
 function stopSession() {
   isRunning = false;
 
-  if (ws) {
-    try { ws.send(JSON.stringify({ type: 'stop' })); } catch {}
-    try { ws.close(); } catch {}
-    ws = null;
+  for (const s of [ws, ws2]) {
+    if (s) { try { s.send(JSON.stringify({ type: 'stop' })); } catch {} try { s.close(); } catch {} }
   }
+  ws = null; ws2 = null;
 
   if (processor) { try { processor.disconnect(); } catch {} processor = null; }
   if (audioCtx)  { try { audioCtx.close(); } catch {} audioCtx = null; }

@@ -279,18 +279,29 @@ async function startSession() {
   const wsUrl = `${proto}://${location.host}/ws`;
   addLog('• A conectar: ' + wsUrl, 't-sys');
 
+  addLog('• A criar WebSocket: ' + wsUrl, 't-sys');
   try {
     ws = new WebSocket(wsUrl);
   } catch(e) {
     setStatus('Erro WebSocket: ' + e.message, 'error');
-    addLog('⚠ WS: ' + e.message, 't-err');
+    addLog('⚠ WS criação falhou: ' + e.message, 't-err');
     btn.disabled = false;
     return;
   }
   ws.binaryType = 'arraybuffer';
 
+  // Timeout se não ligar em 8 segundos
+  const wsTimeout = setTimeout(() => {
+    if (ws && ws.readyState !== WebSocket.OPEN) {
+      addLog('⚠ WS timeout — estado: ' + ws.readyState, 't-err');
+      setStatus('Timeout a ligar (estado=' + ws.readyState + ')', 'error');
+      stopSession();
+    }
+  }, 8000);
+
   ws.onopen = () => {
-    addLog('• WebSocket ligado', 't-sys');
+    clearTimeout(wsTimeout);
+    addLog('• WebSocket ligado! estado=' + ws.readyState, 't-sys');
     ws.send(JSON.stringify({ type: 'start', lang: langTo }));
   };
 

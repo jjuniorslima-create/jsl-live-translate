@@ -407,17 +407,10 @@ function setBtnSpeaking(id, on) {
 function startTalk(session, btnId) {
   if (!isConnected) return;
   activeWS = session;
-  if (activeWS.readyState === WebSocket.OPEN) {
-    try { activeWS.send(JSON.stringify({ type: 'turn_start' })); } catch {}
-  }
   setBtnSpeaking(btnId, true);
 }
 
 function stopTalk(btnId) {
-  // Sinaliza fim de turno explicitamente ao Gemini antes de parar de enviar áudio
-  if (activeWS && activeWS.readyState === WebSocket.OPEN) {
-    try { activeWS.send(JSON.stringify({ type: 'turn_end' })); } catch {}
-  }
   activeWS = null;
   setBtnSpeaking(btnId, false);
 }

@@ -88,38 +88,26 @@ async def ws_translate(websocket: WebSocket):
             while not stop_event.is_set():
                 msg = await websocket.receive()
                 if msg.get("bytes"):
-                    await audio_queue.put(("audio", msg["bytes"]))
+                    await audio_queue.put(msg["bytes"])
                 elif msg.get("text"):
                     data = json.loads(msg["text"])
                     if data.get("type") == "stop":
                         break
-                    elif data.get("type") == "turn_start":
-                        await audio_queue.put(("turn_start", None))
-                    elif data.get("type") == "turn_end":
-                        await audio_queue.put(("turn_end", None))
         except (WebSocketDisconnect, Exception):
             pass
         stop_event.set()
         await audio_queue.put(None)
 
     async def gemini_send(session):
-        """Envia áudio do browser para o Gemini e marca início/fim de turno explicitamente."""
+        """Envia áudio do browser para o Gemini (VAD automático do Gemini decide os turnos)."""
         while not stop_event.is_set():
-            item = await audio_queue.get()
-            if item is None:
+            chunk = await audio_queue.get()
+            if chunk is None:
                 break
-            kind, payload = item
             try:
-                if kind == "audio":
-                    await session.send_realtime_input(
-                        audio=types.Blob(data=payload, mime_type="audio/pcm;rate=16000")
-                    )
-                elif kind == "turn_start":
-                    print("[gemini_send] turn_start", flush=True)
-                    await session.send_realtime_input(activity_start=types.ActivityStart())
-                elif kind == "turn_end":
-                    print("[gemini_send] turn_end", flush=True)
-                    await session.send_realtime_input(activity_end=types.ActivityEnd())
+                await session.send_realtime_input(
+                    audio=types.Blob(data=chunk, mime_type="audio/pcm;rate=16000")
+                )
             except Exception as e:
                 print(f"[gemini_send] erro: {type(e).__name__}: {e}", flush=True)
                 break
@@ -127,51 +115,35 @@ async def ws_translate(websocket: WebSocket):
     async def gemini_recv(session):
         """Recebe áudio traduzido e transcrições do Gemini e envia ao browser.
 
-        session.receive() é um generator contínuo válido para toda a sessão —
-        entrega respostas de vários turnos ao longo do tempo, não deve ser
-        recriado a cada turno (fazê-lo interrompe o consumo da ligação).
-        Usamos wait_for por mensagem só para detectar silêncio prolongado
-        sem travar a app.
+        Segue o padrão oficial do exemplo google-gemini/gemini-live-api-examples:
+        session.receive() é recriado a cada turno (o generator fecha no fim de
+        cada turno) dentro de um while externo que corre durante toda a sessão.
         """
-        RECV_TIMEOUT = 30.0
         try:
-            gen = session.receive()
             while not stop_event.is_set():
-                try:
-                    resp = await asyncio.wait_for(gen.__anext__(), timeout=RECV_TIMEOUT)
-                except StopAsyncIteration:
-                    print("[gemini_recv] sessão Gemini terminou o stream", flush=True)
-                    break
-                except asyncio.TimeoutError:
-                    print("[gemini_recv] timeout à espera de resposta do Gemini", flush=True)
-                    try:
+                turn = session.receive()
+                async for resp in turn:
+                    if stop_event.is_set():
+                        break
+                    sc = resp.server_content
+                    if not sc:
+                        continue
+                    if sc.input_transcription and sc.input_transcription.text:
                         await websocket.send_text(json.dumps({
-                            "type": "status",
-                            "msg": "Sem resposta do Gemini — tente falar novamente."
+                            "type": "transcript_in",
+                            "text": sc.input_transcription.text,
+                            "final": bool(getattr(sc.input_transcription, "finished", False))
                         }))
-                    except Exception:
-                        pass
-                    continue
-
-                sc = resp.server_content
-                if not sc:
-                    continue
-                if sc.input_transcription and sc.input_transcription.text:
-                    await websocket.send_text(json.dumps({
-                        "type": "transcript_in",
-                        "text": sc.input_transcription.text,
-                        "final": bool(getattr(sc.input_transcription, "finished", False))
-                    }))
-                if sc.output_transcription and sc.output_transcription.text:
-                    await websocket.send_text(json.dumps({
-                        "type": "transcript_out",
-                        "text": sc.output_transcription.text,
-                        "final": bool(getattr(sc.output_transcription, "finished", False))
-                    }))
-                if sc.model_turn:
-                    for part in sc.model_turn.parts:
-                        if part.inline_data and part.inline_data.data:
-                            await websocket.send_bytes(part.inline_data.data)
+                    if sc.output_transcription and sc.output_transcription.text:
+                        await websocket.send_text(json.dumps({
+                            "type": "transcript_out",
+                            "text": sc.output_transcription.text,
+                            "final": bool(getattr(sc.output_transcription, "finished", False))
+                        }))
+                    if sc.model_turn:
+                        for part in sc.model_turn.parts:
+                            if part.inline_data and part.inline_data.data:
+                                await websocket.send_bytes(part.inline_data.data)
         except Exception as e:
             print(f"[gemini_recv] erro: {type(e).__name__}: {e}", flush=True)
             if stop_event.is_set():
@@ -189,12 +161,6 @@ async def ws_translate(websocket: WebSocket):
         translation_config=types.TranslationConfig(
             target_language_code=target_lang,
             echo_target_language=False,
-        ),
-        # VAD automático desligado: o turno é controlado manualmente pelo
-        # botão push-to-talk (activity_start / activity_end), senão o
-        # audio_stream_end/VAD do Gemini corta a fala de forma imprevisível.
-        realtime_input_config=types.RealtimeInputConfig(
-            automatic_activity_detection=types.AutomaticActivityDetection(disabled=True),
         ),
     )
 

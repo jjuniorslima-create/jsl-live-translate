@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>JSL Live Translate</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:    #1a1a2e;
+    --card:  #16213e;
+    --panel: #0f2040;
+    --blue:  #4cc9f0;
+    --green: #06d6a0;
+    --red:   #ef233c;
+    --gold:  #ffd166;
+    --text:  #edf2f4;
+    --gray:  #adb5bd;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    gap: 14px;
+  }
+
+  header {
+    text-align: center;
+  }
+  header h1 {
+    color: var(--blue);
+    font-size: 1.2rem;
+    font-weight: 700;
+  }
+  header p {
+    color: var(--gray);
+    font-size: 0.75rem;
+    margin-top: 2px;
+  }
+
+  .card {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 16px;
+  }
+
+  label {
+    display: block;
+    color: var(--gray);
+    font-size: 0.8rem;
+    margin-bottom: 4px;
+  }
+
+  select {
+    width: 100%;
+    background: var(--panel);
+    color: var(--text);
+    border: none;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 0.95rem;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%234cc9f0' d='M6 8L0 0h12z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 32px;
+    cursor: pointer;
+  }
+  select:focus { outline: 2px solid var(--blue); }
+
+  .lang-row {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 8px;
+    align-items: end;
+    margin-top: 4px;
+  }
+  .lang-arrow {
+    color: var(--blue);
+    font-size: 1.4rem;
+    text-align: center;
+    padding-bottom: 8px;
+  }
+
+  .btn {
+    width: 100%;
+    border: none;
+    border-radius: 12px;
+    padding: 16px;
+    font-size: 1.1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity .15s, transform .1s;
+    letter-spacing: .02em;
+  }
+  .btn:active { transform: scale(0.97); opacity: 0.85; }
+  .btn-start  { background: var(--green); color: #000; }
+  .btn-stop   { background: var(--red);   color: #fff; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  #status {
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--gray);
+    min-height: 1.2em;
+  }
+  #status.active { color: var(--green); }
+  #status.error  { color: var(--red); }
+
+  .transcript-box {
+    background: #0d1117;
+    border-radius: 10px;
+    padding: 10px;
+    height: 200px;
+    overflow-y: auto;
+    font-family: 'Consolas', monospace;
+    font-size: 0.82rem;
+    flex: 1;
+  }
+  .transcript-box p { margin-bottom: 4px; line-height: 1.4; }
+  .t-in  { color: var(--gold); }
+  .t-out { color: var(--green); }
+  .t-sys { color: var(--blue); }
+  .t-err { color: var(--red); }
+
+  .legend {
+    display: flex;
+    gap: 12px;
+    font-size: 0.75rem;
+    color: var(--gray);
+    flex-wrap: wrap;
+  }
+  .legend span { display: flex; align-items: center; gap: 4px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🎙 JSL Live Translate</h1>
+  <p>Gemini 3.5 Live Translate • Bidirecional</p>
+</header>
+
+<div class="card">
+  <div class="lang-row">
+    <div>
+      <label>Falo em</label>
+      <select id="langFrom"></select>
+    </div>
+    <div class="lang-arrow">⇄</div>
+    <div>
+      <label>Traduzir para</label>
+      <select id="langTo"></select>
+    </div>
+  </div>
+</div>
+
+<button class="btn btn-start" id="btnMain" onclick="toggleSession()">▶ Iniciar Tradução</button>
+
+<div id="status">Pronto</div>
+
+<div class="card" style="flex:1; display:flex; flex-direction:column; gap:8px; min-height:0;">
+  <div class="legend">
+    <span><span class="dot" style="background:var(--gold)"></span> Você fala</span>
+    <span><span class="dot" style="background:var(--green)"></span> Tradução</span>
+  </div>
+  <div class="transcript-box" id="transcript"></div>
+</div>
+
+<script>
+const LANGUAGES = [];
+let ws = null;
+let isRunning = false;
+let audioCtx = null;
+let micStream = null;
+let processor = null;
+let playCtx = null;
+let nextPlayTime = 0;
+
+// ── Carregar idiomas ──────────────────────────────────────────────────────────
+async function loadLanguages() {
+  try {
+    const res = await fetch('/languages');
+    const langs = await res.json();
+    langs.forEach(l => LANGUAGES.push(l));
+    const from = document.getElementById('langFrom');
+    const to   = document.getElementById('langTo');
+    langs.forEach(l => {
+      from.add(new Option(l.label, l.code));
+      to.add(new Option(l.label, l.code));
+    });
+    from.value = 'pt';
+    to.value   = 'en';
+  } catch(e) {
+    setStatus('Erro a carregar idiomas', 'error');
+  }
+}
+
+// ── UI ────────────────────────────────────────────────────────────────────────
+function setStatus(msg, cls = '') {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = cls;
+}
+
+function addLog(text, cls) {
+  const box = document.getElementById('transcript');
+  const p = document.createElement('p');
+  p.className = cls;
+  p.textContent = text;
+  box.appendChild(p);
+  box.scrollTop = box.scrollHeight;
+}
+
+// ── Sessão principal ──────────────────────────────────────────────────────────
+async function toggleSession() {
+  if (isRunning) {
+    stopSession();
+  } else {
+    await startSession();
+  }
+}
+
+async function startSession() {
+  const btn = document.getElementById('btnMain');
+  btn.disabled = true;
+
+  const langTo = document.getElementById('langTo').value;
+
+  // Microfone
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+  } catch(e) {
+    setStatus('Sem acesso ao microfone: ' + e.message, 'error');
+    btn.disabled = false;
+    return;
+  }
+
+  // Contexto de captura a 16kHz
+  audioCtx = new AudioContext({ sampleRate: 16000 });
+  const source = audioCtx.createMediaStreamSource(micStream);
+
+  // ScriptProcessor para capturar PCM
+  processor = audioCtx.createScriptProcessor(1600, 1, 1);
+  source.connect(processor);
+  processor.connect(audioCtx.destination);
+
+  // Contexto de reprodução a 24kHz
+  playCtx = new AudioContext({ sampleRate: 24000 });
+  nextPlayTime = 0;
+
+  // WebSocket
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'start', lang: langTo }));
+  };
+
+  ws.onmessage = (evt) => {
+    if (evt.data instanceof ArrayBuffer) {
+      playPCM(evt.data);
+    } else {
+      const msg = JSON.parse(evt.data);
+      if (msg.type === 'status')        setStatus(msg.msg, msg.msg.includes('Traduz') ? 'active' : '');
+      else if (msg.type === 'error')    { addLog('⚠ ' + msg.msg, 't-err'); setStatus(msg.msg, 'error'); }
+      else if (msg.type === 'transcript_in')  addLog('🟡 ' + msg.text, 't-in');
+      else if (msg.type === 'transcript_out') addLog('   → ' + msg.text, 't-out');
+    }
+  };
+
+  ws.onclose = () => {
+    if (isRunning) stopSession();
+  };
+
+  ws.onerror = () => {
+    setStatus('Erro de ligação', 'error');
+    stopSession();
+  };
+
+  // Enviar áudio PCM Int16 ao servidor
+  processor.onaudioprocess = (e) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const float32 = e.inputBuffer.getChannelData(0);
+    const int16 = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i++) {
+      int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
+    }
+    ws.send(int16.buffer);
+  };
+
+  isRunning = true;
+  btn.textContent = '■ Parar';
+  btn.className = 'btn btn-stop';
+  btn.disabled = false;
+  addLog('• Sessão iniciada → ' + document.getElementById('langTo').selectedOptions[0].text, 't-sys');
+}
+
+function stopSession() {
+  isRunning = false;
+
+  if (ws) {
+    try { ws.send(JSON.stringify({ type: 'stop' })); } catch {}
+    try { ws.close(); } catch {}
+    ws = null;
+  }
+
+  if (processor) { try { processor.disconnect(); } catch {} processor = null; }
+  if (audioCtx)  { try { audioCtx.close(); } catch {} audioCtx = null; }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  if (playCtx)   { try { playCtx.close(); } catch {} playCtx = null; }
+
+  const btn = document.getElementById('btnMain');
+  btn.textContent = '▶ Iniciar Tradução';
+  btn.className = 'btn btn-start';
+  btn.disabled = false;
+  setStatus('Parado');
+  addLog('• Sessão terminada', 't-sys');
+}
+
+// ── Reprodução áudio PCM Int16 24kHz ─────────────────────────────────────────
+function playPCM(arrayBuffer) {
+  if (!playCtx) return;
+  const int16 = new Int16Array(arrayBuffer);
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+
+  const buf = playCtx.createBuffer(1, float32.length, 24000);
+  buf.copyToChannel(float32, 0);
+
+  const src = playCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(playCtx.destination);
+
+  const now = playCtx.currentTime;
+  if (nextPlayTime < now) nextPlayTime = now + 0.05;
+  src.start(nextPlayTime);
+  nextPlayTime += buf.duration;
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadLanguages();
+</script>
+</body>
+</html>

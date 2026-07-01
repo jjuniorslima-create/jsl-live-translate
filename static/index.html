@@ -194,6 +194,11 @@ let micStream   = null;
 let processor   = null;
 let playCtx     = null;
 let nextPlayTime = 0;
+let isPlaying   = false;  // bloqueia mic durante reprodução
+
+// Elementos "ao vivo" para evitar duplicatas de chunks
+// chave: "label-in" ou "label-out"
+const liveElem = {};
 
 // ── Idiomas ───────────────────────────────────────────────────────────────────
 async function loadLanguages() {
@@ -232,6 +237,22 @@ function addLog(text, cls) {
   p.textContent = text;
   box.appendChild(p);
   box.scrollTop = box.scrollHeight;
+  return p;
+}
+
+// Atualiza chunk ao vivo (evita duplicatas de streaming parcial)
+function liveLog(key, text, cls) {
+  const box = document.getElementById('transcript');
+  if (liveElem[key]) {
+    liveElem[key].textContent = text;
+    box.scrollTop = box.scrollHeight;
+  } else {
+    liveElem[key] = addLog(text, cls);
+  }
+}
+
+function closeLive(key) {
+  delete liveElem[key];
 }
 
 // ── WebSocket por direcção ────────────────────────────────────────────────────
@@ -253,8 +274,15 @@ function openWS(targetLang, label, onReady) {
       const m = JSON.parse(evt.data);
       if (m.type === 'status' && label === 'A→B') setStatus(m.msg, m.msg.includes('Traduz') ? 'active' : '');
       else if (m.type === 'error')          addLog('⚠ [' + label + '] ' + m.msg, 't-err');
-      else if (m.type === 'transcript_in')  addLog('[' + label + '] 🟡 ' + m.text, 't-in');
-      else if (m.type === 'transcript_out') addLog('[' + label + ']  → ' + m.text, 't-out');
+      else if (m.type === 'transcript_in') {
+        liveLog(label + '-in', '[' + label + '] 🟡 ' + m.text, 't-in');
+        if (m.final) closeLive(label + '-in');
+      }
+      else if (m.type === 'transcript_out') {
+        closeLive(label + '-in');  // fecha o original ao mostrar tradução
+        liveLog(label + '-out', '[' + label + ']  → ' + m.text, 't-out');
+        if (m.final) closeLive(label + '-out');
+      }
     } catch(e) {}
   };
   s.onopen = () => {
@@ -306,9 +334,10 @@ async function connect() {
 
   const nativeRate = audioCtx.sampleRate;
 
-  // Enviar áudio apenas para a sessão activa no push-to-talk
+  // Enviar áudio apenas para a sessão activa no push-to-talk (e não durante reprodução)
   processor.onaudioprocess = (ev) => {
     if (!activeWS || activeWS.readyState !== WebSocket.OPEN) return;
+    if (isPlaying) return;  // bloqueia microfone enquanto reproduz tradução
     const f32 = ev.inputBuffer.getChannelData(0);
     let s = f32;
     if (nativeRate !== 16000) {
@@ -419,6 +448,12 @@ function playPCM(arrayBuffer) {
   if (nextPlayTime < now) nextPlayTime = now + 0.05;
   src.start(nextPlayTime);
   nextPlayTime += buf.duration;
+
+  // Bloqueia microfone durante + 300ms após o fim da reprodução
+  isPlaying = true;
+  const stopAt = nextPlayTime - playCtx.currentTime + 0.3;
+  clearTimeout(playPCM._timer);
+  playPCM._timer = setTimeout(() => { isPlaying = false; }, stopAt * 1000);
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

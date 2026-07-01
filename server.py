@@ -123,12 +123,14 @@ async def ws_translate(websocket: WebSocket):
                 if sc.input_transcription and sc.input_transcription.text:
                     await websocket.send_text(json.dumps({
                         "type": "transcript_in",
-                        "text": sc.input_transcription.text
+                        "text": sc.input_transcription.text,
+                        "final": bool(getattr(sc.input_transcription, "finished", False))
                     }))
                 if sc.output_transcription and sc.output_transcription.text:
                     await websocket.send_text(json.dumps({
                         "type": "transcript_out",
-                        "text": sc.output_transcription.text
+                        "text": sc.output_transcription.text,
+                        "final": bool(getattr(sc.output_transcription, "finished", False))
                     }))
                 if sc.model_turn:
                     for part in sc.model_turn.parts:

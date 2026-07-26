@@ -2,6 +2,6 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "uvicorn server:app --host 0.0.0.0 --port $PORT"
+startCommand = "uvicorn server:app --host 0.0.0.0 --port $PORT --ws-ping-interval 25 --ws-ping-timeout 90 --timeout-keep-alive 90"
 healthcheckPath = "/"
 restartPolicyType = "on_failure"

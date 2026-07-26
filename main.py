@@ -21,33 +21,14 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from comum import LANGUAGES, MODEL, INPUT_RATE, criar_config_live
+
 load_dotenv()
 
-INPUT_RATE     = 16000
 INPUT_CHUNK_MS = 100
 INPUT_FRAMES   = INPUT_RATE * INPUT_CHUNK_MS // 1000
 
 OUTPUT_RATE    = 24000
-
-MODEL = "gemini-3.5-live-translate-preview"
-
-LANGUAGES = [
-    ("Português (PT)", "pt"),
-    ("Inglês (EN)",    "en"),
-    ("Espanhol (ES)",  "es"),
-    ("Francês (FR)",   "fr"),
-    ("Alemão (DE)",    "de"),
-    ("Italiano (IT)",  "it"),
-    ("Japonês (JA)",   "ja"),
-    ("Coreano (KO)",   "ko"),
-    ("Chinês (ZH)",    "zh"),
-    ("Árabe (AR)",     "ar"),
-    ("Hindi (HI)",     "hi"),
-    ("Russo (RU)",     "ru"),
-    ("Holandês (NL)",  "nl"),
-    ("Polonês (PL)",   "pl"),
-    ("Turco (TR)",     "tr"),
-]
 
 RECORDINGS_DIR = Path("gravacoes")
 RECORDINGS_DIR.mkdir(exist_ok=True)
@@ -140,15 +121,7 @@ class Translator:
             raise RuntimeError("GEMINI_API_KEY não encontrada no .env")
 
         client = genai.Client(api_key=api_key)
-        cfg = types.LiveConnectConfig(
-            response_modalities=["AUDIO"],
-            input_audio_transcription=types.AudioTranscriptionConfig(),
-            output_audio_transcription=types.AudioTranscriptionConfig(),
-            translation_config=types.TranslationConfig(
-                target_language_code=lang,
-                echo_target_language=False,
-            ),
-        )
+        cfg = criar_config_live(lang)
         async with client.aio.live.connect(model=MODEL, config=cfg) as session:
             send = asyncio.create_task(self._send(session))
             recv = asyncio.create_task(self._recv(session))

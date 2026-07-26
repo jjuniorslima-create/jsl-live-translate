@@ -14,28 +14,9 @@ from fastapi.staticfiles import StaticFiles
 from google import genai
 from google.genai import types
 
+from comum import LANGUAGES, MODEL, criar_config_live
+
 load_dotenv()
-
-INPUT_RATE = 16000
-MODEL = "gemini-3.5-live-translate-preview"
-
-LANGUAGES = [
-    ("Português (PT)", "pt"),
-    ("Inglês (EN)",    "en"),
-    ("Espanhol (ES)",  "es"),
-    ("Francês (FR)",   "fr"),
-    ("Alemão (DE)",    "de"),
-    ("Italiano (IT)",  "it"),
-    ("Japonês (JA)",   "ja"),
-    ("Coreano (KO)",   "ko"),
-    ("Chinês (ZH)",    "zh"),
-    ("Árabe (AR)",     "ar"),
-    ("Hindi (HI)",     "hi"),
-    ("Russo (RU)",     "ru"),
-    ("Holandês (NL)",  "nl"),
-    ("Polonês (PL)",   "pl"),
-    ("Turco (TR)",     "tr"),
-]
 
 app = FastAPI(title="JSL Live Translate")
 
@@ -77,10 +58,15 @@ async def ws_translate(websocket: WebSocket):
         await websocket.close()
         return
 
-    await websocket.send_text(json.dumps({"type": "status", "msg": f"A conectar ao Gemini ({target_lang.upper()})..."}))
+    await websocket.send_text(json.dumps({
+        "type": "status",
+        "msg": f"A conectar ao Gemini ({target_lang.upper()})...",
+        "ready": False,
+    }))
 
     audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
     stop_event = asyncio.Event()
+    vistos_mime: set[str] = set()   # diagnóstico: formato real do áudio do Gemini
 
     async def browser_receiver():
         """Recebe áudio (bytes) e controlo (JSON) do browser."""
@@ -99,7 +85,15 @@ async def ws_translate(websocket: WebSocket):
         await audio_queue.put(None)
 
     async def gemini_send(session):
-        """Envia áudio do browser para o Gemini (VAD automático do Gemini decide os turnos)."""
+        """Envia áudio do browser para o Gemini (VAD automático do Gemini decide os turnos).
+
+        NÃO enviar silêncio nas pausas. Testado a 26/07/2026: alimentar
+        silêncio ao ritmo real faz o Gemini devolver áudio continuamente
+        (~250 ms de áudio a cada 250 ms), o que enche a fila de reprodução
+        do browser e é a parte mais cara da factura. As quedas de ligação
+        que o silêncio tentava evitar tinham outra causa — o ping do
+        uvicorn a expirar aos 20 s — já resolvida no Procfile/railway.toml.
+        """
         while not stop_event.is_set():
             chunk = await audio_queue.get()
             if chunk is None:
@@ -145,6 +139,11 @@ async def ws_translate(websocket: WebSocket):
                 if sc.model_turn:
                     for part in sc.model_turn.parts:
                         if part.inline_data and part.inline_data.data:
+                            nonlocal_mime = getattr(part.inline_data, "mime_type", None)
+                            if nonlocal_mime and nonlocal_mime not in vistos_mime:
+                                vistos_mime.add(nonlocal_mime)
+                                print(f"[audio-saida] mime_type do Gemini: {nonlocal_mime} "
+                                      f"(bytes por bocado: {len(part.inline_data.data)})", flush=True)
                             await websocket.send_bytes(part.inline_data.data)
         except Exception as e:
             print(f"[gemini_recv] erro: {type(e).__name__}: {e}", flush=True)
@@ -156,29 +155,31 @@ async def ws_translate(websocket: WebSocket):
                 pass
 
     client = genai.Client(api_key=api_key)
-    cfg = types.LiveConnectConfig(
-        response_modalities=["AUDIO"],
-        input_audio_transcription=types.AudioTranscriptionConfig(),
-        output_audio_transcription=types.AudioTranscriptionConfig(),
-        translation_config=types.TranslationConfig(
-            target_language_code=target_lang,
-            echo_target_language=False,
-        ),
-    )
+    cfg = criar_config_live(target_lang)
 
     try:
         async with client.aio.live.connect(model=MODEL, config=cfg) as session:
-            await websocket.send_text(json.dumps({"type": "status", "msg": "Conectado! A traduzir..."}))
+            await websocket.send_text(json.dumps({
+                "type": "status",
+                "msg": "Conectado! A traduzir...",
+                "ready": True,
+            }))
 
             browser_task = asyncio.create_task(browser_receiver())
             send_task    = asyncio.create_task(gemini_send(session))
             recv_task    = asyncio.create_task(gemini_recv(session))
 
-            # Aguarda apenas o browser desligar (stop ou disconnect)
-            # gemini_send/recv podem terminar por si e não derrubam a sessão
-            await browser_task
+            # Termina à primeira das três que acabar. Se o Gemini fechar a
+            # sessão (visto em produção: "received 1001 going away"), esperar
+            # só pelo browser deixava a ligação viva mas sem ninguém do outro
+            # lado — os botões pareciam bons e nunca chegava tradução.
+            # Fechando aqui, o browser detecta a queda e reabre sozinho.
+            done, pending = await asyncio.wait(
+                [browser_task, send_task, recv_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
-            for t in [send_task, recv_task]:
+            for t in pending:
                 t.cancel()
                 try:
                     await t

@@ -92,6 +92,8 @@
     cursor: pointer;
     touch-action: none;
     user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
     transition: transform .1s, box-shadow .1s;
     display: flex;
     flex-direction: column;
@@ -141,7 +143,7 @@
 <body>
 
 <header>
-  <h1>🎙 JSL Live Translate</h1>
+  <h1>🎙 JSL Live Translate <span style="color:var(--green);font-size:0.8rem">v2</span></h1>
   <p>Gemini 3.5 Live Translate • Push-to-Talk Bidirecional</p>
 </header>
 
@@ -189,18 +191,33 @@ let ws  = null;   // A→B (eu falo langFrom, traduz para langTo)
 let ws2 = null;   // B→A (outro fala langTo, traduz para langFrom)
 let isConnected = false;
 let activeWS    = null;  // sessão activa no push-to-talk
-let audioCtx    = null;
+let ctx         = null;  // AudioContext único: captura E reprodução
 let micStream   = null;
 let processor   = null;
-let playCtx     = null;
 let nextPlayTime = 0;
-let isPlaying   = false;  // bloqueia mic durante reprodução
+let agendados   = [];    // bocados de som já marcados para tocar
+let duckUntil   = 0;     // até quando baixar o microfone (evita ouvir-se a si próprio)
+let emEspera    = [];    // som que chega enquanto falamos, para tocar só no fim
+let audioChunks = 0;     // diagnóstico: bocados de áudio recebidos do Gemini
+let wakeLock    = null;
 
 // Elementos "ao vivo" para evitar duplicatas de chunks
 // chave: "label-in" ou "label-out"
 const liveElem = {};
 
 // ── Idiomas ───────────────────────────────────────────────────────────────────
+// A escolha fica guardada no telemóvel, para não ser preciso mudar a cada vez.
+// Em try/catch porque alguns browsers bloqueiam este armazenamento.
+function lerIdiomaGuardado(chave, porDefeito) {
+  try { return localStorage.getItem(chave) || porDefeito; } catch(e) { return porDefeito; }
+}
+function guardarIdiomas() {
+  try {
+    localStorage.setItem('jsl_lang_from', document.getElementById('langFrom').value);
+    localStorage.setItem('jsl_lang_to',   document.getElementById('langTo').value);
+  } catch(e) {}
+}
+
 async function loadLanguages() {
   try {
     const langs = await (await fetch('/languages')).json();
@@ -208,8 +225,9 @@ async function loadLanguages() {
     const from = document.getElementById('langFrom');
     const to   = document.getElementById('langTo');
     langs.forEach(l => { from.add(new Option(l.label, l.code)); to.add(new Option(l.label, l.code)); });
-    from.value = 'pt';
-    to.value   = 'en';
+    // Recupera a última escolha; se nunca escolheu, português → francês.
+    from.value = lerIdiomaGuardado('jsl_lang_from', 'pt');
+    to.value   = lerIdiomaGuardado('jsl_lang_to',   'fr');
     updateLabels();
   } catch(e) { setStatus('Erro a carregar idiomas', 'error'); }
 }
@@ -222,7 +240,9 @@ function updateLabels() {
   document.getElementById('labelEu').textContent = fLabel + ' → ' + tLabel;
   document.getElementById('labelOutro').textContent = tLabel + ' → ' + fLabel;
 }
-document.addEventListener('change', e => { if (e.target.id === 'langFrom' || e.target.id === 'langTo') updateLabels(); });
+document.addEventListener('change', e => {
+  if (e.target.id === 'langFrom' || e.target.id === 'langTo') { updateLabels(); guardarIdiomas(); }
+});
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
 function setStatus(msg, cls = '') {
@@ -256,23 +276,53 @@ function closeLive(key) {
 }
 
 // ── WebSocket por direcção ────────────────────────────────────────────────────
-function openWS(targetLang, label, onReady) {
+function openWS(targetLang, label, onReady, slot, attempt = 0) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const s = new WebSocket(`${proto}://${location.host}/ws`);
   s.binaryType = 'arraybuffer';
 
+  const btnId = (slot === 'A') ? 'btnEu' : 'btnOutro';
+  let att = attempt;
+
+  // Vigia só cancelada quando a ligação abre mesmo. Antes era também cancelada
+  // no onerror/onclose, o que fazia um socket rebentado antes de abrir passar
+  // despercebido em vez de accionar a limpeza.
   const t = setTimeout(() => {
     addLog('⚠ Timeout ' + label, 't-err');
-    disconnect();
+    try { s.close(); } catch(e) {}
+    if (!isConnected) disconnect();
   }, 12000);
 
-  s.onerror = () => { clearTimeout(t); addLog('⚠ Erro WS ' + label, 't-err'); };
-  s.onclose = (e) => { clearTimeout(t); if (isConnected) { addLog('• ' + label + ' fechado', 't-sys'); } };
+  s.onerror = () => { addLog('⚠ Erro de ligação ' + label, 't-err'); };
+
+  s.onclose = (e) => {
+    clearTimeout(t);
+    clearInterval(s._ping);
+    if (!isConnected) return;                 // desligado de propósito
+    addLog('• ' + label + ' caiu (código ' + e.code + ')', 't-err');
+    document.getElementById(btnId).disabled = true;
+    if (activeWS === s) { activeWS = null; setBtnSpeaking(btnId, false); }
+    if (att < 3) {
+      const wait = [1000, 3000, 6000][att];
+      addLog('• a reabrir ' + label + ' em ' + (wait / 1000) + 's...', 't-sys');
+      setTimeout(() => {
+        if (!isConnected) return;
+        const ns = openWS(targetLang, label, () => {
+          document.getElementById(btnId).disabled = false;
+          addLog('• ' + label + ' reposto', 't-sys');
+        }, slot, att + 1);
+        if (slot === 'A') ws = ns; else ws2 = ns;
+      }, wait);
+    } else {
+      addLog('⚠ ' + label + ' não recuperou. Desligue e volte a ligar.', 't-err');
+    }
+  };
+
   s.onmessage = (evt) => {
     if (evt.data instanceof ArrayBuffer) { playPCM(evt.data); return; }
     try {
       const m = JSON.parse(evt.data);
-      if (m.type === 'status' && label === 'A→B') setStatus(m.msg, m.msg.includes('Traduz') ? 'active' : '');
+      if (m.type === 'status' && label === 'A→B') setStatus(m.msg, m.ready ? 'active' : '');
       else if (m.type === 'error')          addLog('⚠ [' + label + '] ' + m.msg, 't-err');
       else if (m.type === 'transcript_in') {
         liveLog(label + '-in', '[' + label + '] 🟡 ' + m.text, 't-in');
@@ -287,17 +337,48 @@ function openWS(targetLang, label, onReady) {
   };
   s.onopen = () => {
     clearTimeout(t);
+    att = 0;
     addLog('• ' + label + ' ligado', 't-sys');
     s.send(JSON.stringify({ type: 'start', lang: targetLang }));
+    // Sinal de vida: impede que a ligação parada morra em silêncio.
+    // O servidor ignora tudo o que não seja {"type":"stop"}.
+    s._ping = setInterval(() => {
+      if (s.readyState === WebSocket.OPEN) s.send(JSON.stringify({ type: 'ping' }));
+    }, 20000);
     onReady();
   };
   return s;
 }
 
+// ── Áudio: criar e acordar ────────────────────────────────────────────────────
+// TEM de correr sincronamente dentro do toque do utilizador. Depois de um
+// await (ex.: o diálogo de permissão do microfone) o browser já não considera
+// o gesto activo e o AudioContext nasce "suspended" — resultado: nenhum som
+// sai no telemóvel, que era exactamente o sintoma reportado.
+function ensureAudioContext() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!ctx || ctx.state === 'closed') ctx = new AC();
+  if (ctx.state === 'suspended') ctx.resume();
+  // Buffer silencioso: destranca a saída de áudio no primeiro gesto.
+  const b = ctx.createBuffer(1, 1, 22050);
+  const s = ctx.createBufferSource();
+  s.buffer = b;
+  s.connect(ctx.destination);
+  s.start(0);
+  return ctx;
+}
+
+// O sistema volta a suspender o contexto ao ir para background, ao bloquear
+// o ecrã ou numa chamada recebida. Chamado nos pontos onde isso se nota.
+function wakeAudio() {
+  if (ctx && ctx.state === 'suspended') ctx.resume();
+}
+
 // ── Ligar / Desligar ──────────────────────────────────────────────────────────
-async function toggleConnect() {
+function toggleConnect() {
+  ensureAudioContext();
   if (isConnected) { disconnect(); return; }
-  await connect();
+  connect();
 }
 
 async function connect() {
@@ -317,37 +398,57 @@ async function connect() {
     btn.disabled = false; return;
   }
 
+  // O diálogo de permissão acima pode ter suspendido o contexto.
+  wakeAudio();
+
   try {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const src = audioCtx.createMediaStreamSource(micStream);
-    processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    ensureAudioContext();
+    const src = ctx.createMediaStreamSource(micStream);
+    processor = ctx.createScriptProcessor(4096, 1, 1);
     src.connect(processor);
-    processor.connect(audioCtx.destination);
+    processor.connect(ctx.destination);
   } catch(e) {
     setStatus('Erro áudio: ' + e.message, 'error');
     micStream.getTracks().forEach(t => t.stop());
     btn.disabled = false; return;
   }
 
-  try { playCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) { playCtx = null; }
   nextPlayTime = 0;
+  audioChunks  = 0;
 
-  const nativeRate = audioCtx.sampleRate;
+  const nativeRate = ctx.sampleRate;
+  addLog('• som: ' + ctx.state + ' @ ' + nativeRate + 'Hz', ctx.state === 'running' ? 't-sys' : 't-err');
 
-  // Enviar áudio apenas para a sessão activa no push-to-talk (e não durante reprodução)
+  // Enviar áudio apenas para a sessão activa no push-to-talk.
+  // Não há bloqueio durante a reprodução: este modelo devolve a tradução
+  // ENQUANTO ainda se fala, por isso silenciar o microfone aí cortava o resto
+  // da frase. O eco é tratado pelo cancelamento do browser (echoCancellation)
+  // e por echo_target_language=False no lado do Gemini.
   processor.onaudioprocess = (ev) => {
     if (!activeWS || activeWS.readyState !== WebSocket.OPEN) return;
-    if (isPlaying) return;  // bloqueia microfone enquanto reproduz tradução
     const f32 = ev.inputBuffer.getChannelData(0);
     let s = f32;
     if (nativeRate !== 16000) {
+      // Média de blocos em vez de descartar amostras: filtro rudimentar que
+      // evita o aliasing da decimação crua e melhora o reconhecimento da voz.
       const r = nativeRate / 16000;
       const n = Math.floor(f32.length / r);
       s = new Float32Array(n);
-      for (let i = 0; i < n; i++) s[i] = f32[Math.floor(i * r)];
+      for (let i = 0; i < n; i++) {
+        const a = Math.floor(i * r);
+        const b = Math.min(Math.floor((i + 1) * r), f32.length);
+        let sum = 0;
+        for (let j = a; j < b; j++) sum += f32[j];
+        s[i] = sum / Math.max(1, b - a);
+      }
     }
+    // Enquanto o altifalante está a dizer a tradução, baixa o microfone em
+    // vez de o cortar. Cortar em seco fazia o Gemini pensar que a frase tinha
+    // acabado; baixar deixa a nossa voz passar (está muito mais perto) mas
+    // impede que a tradução se ouça a si própria e entre em círculo.
+    const g = (performance.now() < duckUntil) ? 0.15 : 1.0;
     const i16 = new Int16Array(s.length);
-    for (let i = 0; i < s.length; i++) i16[i] = Math.max(-32768, Math.min(32767, s[i] * 32768));
+    for (let i = 0; i < s.length; i++) i16[i] = Math.max(-32768, Math.min(32767, s[i] * g * 32768));
     activeWS.send(i16.buffer);
   };
 
@@ -364,11 +465,24 @@ async function connect() {
       document.getElementById('btnOutro').disabled = false;
       setStatus('Ligado — prima e segura para falar', 'active');
       addLog('• Pronto! Prima o botão enquanto fala.', 't-sys');
+      addLog('💡 Auscultadores dão melhor qualidade.', 't-sys');
     }
   };
 
-  ws  = openWS(langTo,   'A→B', onReady);
-  ws2 = openWS(langFrom, 'B→A', onReady);
+  // Os idiomas ficam trancados: as sessões do Gemini fixam a língua-alvo na
+  // ligação e não a podem mudar a meio, senão os botões passavam a mentir.
+  document.getElementById('langFrom').disabled = true;
+  document.getElementById('langTo').disabled   = true;
+
+  // Ecrã a adormecer suspende o áudio a meio de uma conversa.
+  if (navigator.wakeLock) {
+    navigator.wakeLock.request('screen')
+      .then(w => { wakeLock = w; })
+      .catch(() => {});
+  }
+
+  ws  = openWS(langTo,   'A→B', onReady, 'A');
+  ws2 = openWS(langFrom, 'B→A', onReady, 'B');
 
   btn.disabled = false;
 }
@@ -378,14 +492,24 @@ function disconnect() {
   activeWS = null;
 
   for (const s of [ws, ws2]) {
-    if (s) { try { s.send(JSON.stringify({ type: 'stop' })); } catch {} try { s.close(); } catch {} }
+    if (s) {
+      clearInterval(s._ping);
+      try { s.send(JSON.stringify({ type: 'stop' })); } catch {}
+      try { s.close(); } catch {}
+    }
   }
   ws = null; ws2 = null;
 
   if (processor) { try { processor.disconnect(); } catch {} processor = null; }
-  if (audioCtx)  { try { audioCtx.close(); } catch {} audioCtx = null; }
   if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
-  if (playCtx)   { try { playCtx.close(); } catch {} playCtx = null; }
+  // suspend em vez de close: um contexto fechado exigiria novo gesto do
+  // utilizador para ser recriado; suspenso volta com o resume do próximo clique.
+  resetPlayback();
+  if (ctx) { try { ctx.suspend(); } catch {} }
+
+  if (wakeLock) { try { wakeLock.release(); } catch {} wakeLock = null; }
+  document.getElementById('langFrom').disabled = false;
+  document.getElementById('langTo').disabled   = false;
 
   document.getElementById('btnConnect').textContent = '▶ Ligar';
   document.getElementById('btnConnect').className = 'btn-connect';
@@ -406,14 +530,38 @@ function setBtnSpeaking(id, on) {
 
 function startTalk(session, btnId) {
   if (!isConnected) return;
+  wakeAudio();
+  // Nova fala: o que sobrar da tradução anterior já não interessa e só
+  // servia para empurrar esta para mais tarde.
+  resetPlayback();
+  // Fecha as linhas da fala anterior. Sem isto, a tradução nova era escrita
+  // POR CIMA da linha antiga lá em cima, em vez de aparecer no fim — parecia
+  // que nunca chegava resposta.
+  for (const l of ['A→B', 'B→A']) { closeLive(l + '-in'); closeLive(l + '-out'); }
   activeWS = session;
   setBtnSpeaking(btnId, true);
 }
 
 function stopTalk(btnId) {
+  if (!activeWS) { setBtnSpeaking(btnId, false); return; }
   activeWS = null;
   setBtnSpeaking(btnId, false);
+  // Largou o botão: toca de uma vez o que ficou guardado durante a fala.
+  const guardado = emEspera;
+  emEspera = [];
+  for (const c of guardado) agendarSom(c);
 }
+
+// Sair da app suspende o áudio; ao voltar é preciso acordá-lo. E se uma
+// notificação roubar o toque, o botão ficava preso a enviar áudio.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopTalk('btnEu');
+    stopTalk('btnOutro');
+  } else {
+    wakeAudio();
+  }
+});
 
 // Eventos para botão EU FALO
 const btnEu = document.getElementById('btnEu');
@@ -434,27 +582,78 @@ btnOutro.addEventListener('touchend',   (e) => { e.preventDefault(); stopTalk('b
 btnOutro.addEventListener('touchcancel',() => stopTalk('btnOutro'));
 
 // ── Reprodução áudio PCM 24kHz ────────────────────────────────────────────────
+// Esvazia a fila de som. Sem isto, cada tradução era marcada para tocar
+// atrás da anterior e o atraso somava-se de ciclo para ciclo — era esta a
+// causa de "o primeiro ciclo dá certo, o segundo demora demais".
+function resetPlayback() {
+  for (const src of agendados) { try { src.stop(); } catch(e) {} }
+  agendados = [];
+  emEspera = [];
+  nextPlayTime = 0;
+}
+
 function playPCM(arrayBuffer) {
-  if (!playCtx) return;
+  if (!ctx) return;
+  wakeAudio();
+
+  audioChunks++;
+  liveLog('diag-audio', '• áudio recebido: ' + audioChunks + ' bocados', 't-sys');
+
   const int16 = new Int16Array(arrayBuffer);
+
+  // Este modelo emite som CONTÍNUO: fala quando tem algo a dizer e manda
+  // silêncio o resto do tempo. Medido a 26/07/2026: uma frase de 6s devolveu
+  // 15,5s de áudio, quase todo silêncio. Pôr isso na fila fazia-a nunca
+  // esvaziar e cada frase nova ficava atrás de segundos de nada — daí a
+  // sensação de fila de espera e de tudo chegar tarde. Saltamos o silêncio.
+  let pico = 0;
+  for (let i = 0; i < int16.length; i++) {
+    const v = int16[i] < 0 ? -int16[i] : int16[i];
+    if (v > pico) pico = v;
+  }
+  if (pico < 300) return;   // ~1% do máximo: silêncio, não vale a pena tocar
+
+  // Este modelo é intérprete SIMULTÂNEO: começa a traduzir à terceira palavra,
+  // sem esperar pelo fim da frase, e não há forma de o mandar esperar. Por isso
+  // esperamos nós: enquanto o botão está carregado, o som fica guardado e só
+  // toca quando se larga. Assim a tradução sai inteira e de uma vez, e o
+  // microfone nunca está aberto ao mesmo tempo que o altifalante.
+  if (activeWS) { emEspera.push(int16); return; }
+
+  agendarSom(int16);
+}
+
+function agendarSom(int16) {
+  if (!ctx) return;
   const f32   = new Float32Array(int16.length);
   for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 32768;
-  const buf = playCtx.createBuffer(1, f32.length, 24000);
+  // Criado a 24000Hz; o grafo do Web Audio reamostra para a taxa do aparelho.
+  const buf = ctx.createBuffer(1, f32.length, 24000);
   buf.copyToChannel(f32, 0);
-  const src = playCtx.createBufferSource();
+  const src = ctx.createBufferSource();
   src.buffer = buf;
-  src.connect(playCtx.destination);
-  const now = playCtx.currentTime;
-  if (nextPlayTime < now) nextPlayTime = now + 0.05;
+  src.connect(ctx.destination);
+  // Margem de 0,2s: dá folga para a variação da rede sem se notar atraso.
+  // Com apenas 0,05s, qualquer atraso de um bocado deixava buracos no som.
+  // NÃO cortar a fila a meio de uma tradução. Uma frase normal chega em
+  // rajada e enche vários segundos de fila — isso é normal, não é atraso a
+  // fugir. Uma tentativa de limitar a fila aqui cortava o som a meio e fazia
+  // com que soasse fragmentado e lento. O acumular entre falas já é tratado
+  // pelo resetPlayback() ao carregar num botão.
+  const now = ctx.currentTime;
+  if (nextPlayTime < now) nextPlayTime = now + 0.2;
   src.start(nextPlayTime);
   nextPlayTime += buf.duration;
 
-  // Bloqueia microfone durante + 300ms após o fim da reprodução
-  // (teto de 4s como rede de segurança, caso o cálculo de nextPlayTime falhe)
-  isPlaying = true;
-  const stopAt = Math.min(nextPlayTime - playCtx.currentTime + 0.3, 4);
-  clearTimeout(playPCM._timer);
-  playPCM._timer = setTimeout(() => { isPlaying = false; }, stopAt * 1000);
+  // Calculado a partir DESTE bocado (nunca do cursor da fila, que só cresce —
+  // foi esse o erro original que calava o microfone a meio da frase).
+  duckUntil = performance.now() + buf.duration * 1000 + 150;
+
+  agendados.push(src);
+  src.onended = () => {
+    const i = agendados.indexOf(src);
+    if (i >= 0) agendados.splice(i, 1);
+  };
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

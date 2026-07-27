@@ -1,5 +1,5 @@
 """
-Teste automático do JSL Live Translate.
+Teste automático do JJSL Translate Mobile.
 
 Manda uma gravação real de voz para o servidor, como se fosse o telemóvel,
 e mede o que volta: quantidade de som, duração implícita e tempo real.

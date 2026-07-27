@@ -1,5 +1,5 @@
 """
-Configuração compartilhada do JSL Live Translate.
+Configuração compartilhada do JJSL Translate Mobile.
 Usada pelo main.py (aplicativo do computador) e pelo server.py (versão web).
 Alterou aqui, valeu para os dois.
 """

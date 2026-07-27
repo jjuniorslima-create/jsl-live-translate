@@ -1,5 +1,5 @@
 """
-JSL Live Translate — Servidor Web para Telemóvel
+JJSL Translate Mobile — Servidor Web para Telemóvel
 FastAPI + WebSocket → Gemini Live Translate → Browser
 """
 import asyncio
@@ -18,7 +18,7 @@ from comum import LANGUAGES, MODEL, criar_config_live
 
 load_dotenv()
 
-app = FastAPI(title="JSL Live Translate")
+app = FastAPI(title="JJSL Translate Mobile")
 
 static_dir = Path(__file__).parent / "static"
 static_dir.mkdir(exist_ok=True)
